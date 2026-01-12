@@ -1,0 +1,194 @@
+plugins {
+    id 'java'
+    id 'de.undercouch.download' version '5.4.0'
+}
+
+group = 'net.Flint'
+version = '1.0-SNAPSHOT'
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+
+repositories {
+    mavenCentral()
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+dependencies {
+    testImplementation platform('org.junit:junit-bom:5.10.0')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    implementation 'org.ow2.asm:asm:9.6'
+    implementation 'org.ow2.asm:asm-commons:9.6'
+    implementation 'org.slf4j:slf4j-api:2.0.9'
+    implementation 'org.apache.logging.log4j:log4j-slf4j2-impl:2.20.0'
+    implementation 'org.apache.logging.log4j:log4j-core:2.20.0'
+}
+
+test {
+    useJUnitPlatform()
+}
+
+// 1. 改成 1.21.10
+def mcVersion = '1.21.10'
+def mcManifestUrl = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json'
+
+// 2. 工作目录
+def runDir     = layout.projectDirectory.dir('run')
+def mcDir      = runDir.dir('.minecraft')
+def versionDir = mcDir.dir("versions/$mcVersion")
+def modsDir    = mcDir.dir('mods')
+def libsDir    = mcDir.dir('libraries')
+
+// 3. 下载版本 json
+tasks.register('downloadVersionJson') {
+    def jsonFile = versionDir.file("${mcVersion}.json").asFile
+    outputs.file jsonFile
+    doLast {
+        def slurper = new groovy.json.JsonSlurper()
+        def manifest = slurper.parseText(new URL(mcManifestUrl).text)
+        def versionEntry = manifest.versions.find { it.id == mcVersion }
+        def url = versionEntry.url
+        def versionJson = slurper.parseText(new URL(url).text)
+        jsonFile.parentFile.mkdirs()
+        jsonFile.text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(versionJson))
+    }
+}
+
+// 4. 下载 client.jar
+tasks.register('downloadClientJar', de.undercouch.gradle.tasks.download.Download) {
+    dependsOn downloadVersionJson
+    doFirst {
+        def jsonFile = downloadVersionJson.outputs.files.singleFile
+        def slurper = new groovy.json.JsonSlurper()
+        def json = slurper.parseText(jsonFile.text)
+        src json.downloads.client.url
+        dest versionDir.file("${mcVersion}.jar").asFile
+        overwrite false
+    }
+}
+
+// 5. 下载 libraries
+tasks.register('downloadLibraries') {
+    dependsOn downloadVersionJson
+    doLast {
+        def slurper = new groovy.json.JsonSlurper()
+        def jsonFile = downloadVersionJson.outputs.files.singleFile
+        def json = slurper.parseText(jsonFile.text)
+        json.libraries.each { lib ->
+            def artifact = lib.downloads?.artifact
+            if (artifact) {
+                def path = artifact.path
+                def url  = artifact.url
+                def file = libsDir.file(path).asFile
+                if (!file.exists()) {
+                    file.parentFile.mkdirs()
+                    new URL(url).withInputStream { it.transferTo(file.newOutputStream()) }
+                }
+            }
+        }
+    }
+}
+
+// 6. 下载 Assets 索引
+tasks.register('downloadAssetsIndex') {
+    dependsOn downloadVersionJson
+    doLast {
+        def jsonFile = downloadVersionJson.outputs.files.singleFile
+        def slurper = new groovy.json.JsonSlurper()
+        def versionJson = slurper.parseText(jsonFile.text)
+        def assetIndexId = versionJson.assetIndex.id
+        def assetIndexUrl = versionJson.assetIndex.url
+        def assetIndexFile = mcDir.file("assets/indexes/${assetIndexId}.json").asFile
+        
+        assetIndexFile.parentFile.mkdirs()
+        new URL(assetIndexUrl).withInputStream { 
+            it.transferTo(assetIndexFile.newOutputStream()) 
+        }
+        println "Downloaded asset index: ${assetIndexId}"
+    }
+}
+
+// 7. 下载 Assets 语言文件
+tasks.register('downloadAssets') {
+    dependsOn downloadAssetsIndex
+    doLast {
+        def assetIndexFile = mcDir.file("assets/indexes/27.json").asFile
+        def assetIndexText = assetIndexFile.text
+        
+        // 查找中文语言文件的哈希值
+        def zhCNMatch = assetIndexText =~ /"minecraft\/lang\/zh_cn\.json".*"hash"\s*:\s*"([a-f0-9]+)"/
+        def zhTWMatch = assetIndexText =~ /"minecraft\/lang\/zh_tw\.json".*"hash"\s*:\s*"([a-f0-9]+)"/
+        
+        [zhCNMatch, zhTWMatch].each { match ->
+            if (match && match.size() > 0) {
+                def hash = match[0][1]
+                def langKey = match == zhCNMatch ? "zh_cn.json" : "zh_tw.json"
+                def firstTwo = hash.substring(0, 2)
+                def objectUrl = "https://resources.download.minecraft.net/${firstTwo}/${hash}"
+                def objectFile = mcDir.file("assets/objects/${firstTwo}/${hash}").asFile
+                
+                if (!objectFile.exists()) {
+                    objectFile.parentFile.mkdirs()
+                    println "Downloading language asset: ${langKey}"
+                    new URL(objectUrl).withInputStream { 
+                        it.transferTo(objectFile.newOutputStream()) 
+                    }
+                } else {
+                    println "Language asset already exists: ${langKey}"
+                }
+            }
+        }
+    }
+}
+
+// 8. 测试 mod 拷贝
+tasks.register('copyTestMod', Copy) {
+    dependsOn tasks.jar
+    from tasks.jar
+    into modsDir
+}
+
+// 9. 启动配置
+tasks.register('runClient', JavaExec) {
+    group = 'minecraft'
+    description = 'Launch Minecraft 1.21.10 Client with your loader'
+    dependsOn downloadClientJar, downloadLibraries, downloadAssetsIndex, downloadAssets, copyTestMod
+    workingDir = runDir.asFile
+    
+    // 获取所有库文件
+    def allLibs = fileTree(dir: libsDir.asFile, include: '**/*.jar').filter { it.exists() }
+    def mcJar = versionDir.file("${mcVersion}.jar").asFile
+    
+    // 包含所有依赖
+    classpath = files(tasks.jar.archiveFile.get().asFile, configurations.runtimeClasspath, allLibs, mcJar)
+    mainClass = 'net.Flint.FlintLauncherMain'
+    args '--gameDir', mcDir.asFile,
+            '--assetsDir', mcDir.dir('assets').asFile,
+            '--assetIndex', '27', // 使用正确的资产索引ID
+            '--version', mcVersion,
+            '--accessToken', '0',  // 使用虚拟访问令牌
+            '--username', 'FlintUser',  // 添加用户名
+            '--userProperties', '{}',
+            '--mcjar', mcJar.absolutePath
+    jvmArgs '-Xmx2G', '-XX:+UnlockExperimentalVMOptions', '-XX:+UseG1GC'
+    // 设置日志级别以减少输出
+    jvmArgs '-Dlog4j.configurationFile=file:src/main/resources/log4j.properties'
+    // 可能需要添加库路径
+    systemProperties(['java.library.path': mcDir.dir('natives').asFile.absolutePath])
+    // 后续再拼 -javaagent: 、 -Dmixin.config= 等参数
+}
+
+jar {
+    manifest {
+        attributes(
+            'Premain-Class': 'net.Flint.FlintAgent',
+            'Agent-Class': 'net.Flint.FlintAgent',
+            'Can-Redefine-Classes': 'true',
+            'Can-Retransform-Classes': 'true'
+        )
+    }
+}
