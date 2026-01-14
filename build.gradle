@@ -26,6 +26,8 @@ dependencies {
     implementation 'org.slf4j:slf4j-api:2.0.9'
     implementation 'org.apache.logging.log4j:log4j-slf4j2-impl:2.20.0'
     implementation 'org.apache.logging.log4j:log4j-core:2.20.0'
+    implementation 'com.google.code.gson:gson:2.10.1'
+
 }
 
 test {
@@ -79,14 +81,37 @@ tasks.register('downloadLibraries') {
         def jsonFile = downloadVersionJson.outputs.files.singleFile
         def json = slurper.parseText(jsonFile.text)
         json.libraries.each { lib ->
+            // 处理主 artifact
             def artifact = lib.downloads?.artifact
             if (artifact) {
                 def path = artifact.path
-                def url  = artifact.url
+                def url = artifact.url
                 def file = libsDir.file(path).asFile
                 if (!file.exists()) {
                     file.parentFile.mkdirs()
+                    println "Downloading library: ${lib.name} from ${url}"
                     new URL(url).withInputStream { it.transferTo(file.newOutputStream()) }
+                } else {
+                    println "Library already exists: ${lib.name}"
+                }
+            }
+            
+            // 处理 natives（如果存在）
+            def classifiers = lib.downloads?.classifiers
+            if (classifiers) {
+                // 为 Windows 选择 natives
+                def nativeInfo = classifiers."natives-windows" ?: classifiers."natives-linux" ?: classifiers."natives-macos"
+                if (nativeInfo) {
+                    def path = nativeInfo.path
+                    def url = nativeInfo.url
+                    def file = libsDir.file(path).asFile
+                    if (!file.exists()) {
+                        file.parentFile.mkdirs()
+                        println "Downloading native library: ${lib.name} from ${url}"
+                        new URL(url).withInputStream { it.transferTo(file.newOutputStream()) }
+                    } else {
+                        println "Native library already exists: ${lib.name}"
+                    }
                 }
             }
         }
@@ -163,7 +188,7 @@ tasks.register('runClient', JavaExec) {
     def allLibs = fileTree(dir: libsDir.asFile, include: '**/*.jar').filter { it.exists() }
     def mcJar = versionDir.file("${mcVersion}.jar").asFile
     
-    // 包含所有依赖
+    // 包含所有依赖 - 重要：确保Minecraft的所有依赖库都在类路径中
     classpath = files(tasks.jar.archiveFile.get().asFile, configurations.runtimeClasspath, allLibs, mcJar)
     mainClass = 'net.Flint.FlintLauncherMain'
     args '--gameDir', mcDir.asFile,
@@ -177,9 +202,8 @@ tasks.register('runClient', JavaExec) {
     jvmArgs '-Xmx2G', '-XX:+UnlockExperimentalVMOptions', '-XX:+UseG1GC'
     // 设置日志级别以减少输出
     jvmArgs '-Dlog4j.configurationFile=file:src/main/resources/log4j.properties'
-    // 可能需要添加库路径
+    // 添加库路径
     systemProperties(['java.library.path': mcDir.dir('natives').asFile.absolutePath])
-    // 后续再拼 -javaagent: 、 -Dmixin.config= 等参数
 }
 
 jar {

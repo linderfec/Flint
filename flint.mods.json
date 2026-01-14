@@ -1,0 +1,15 @@
+{
+  "id": "example_mod",
+  "version": "1.0.0",
+  "name": "Example Mod",
+  "description": "这是一个示例模组，演示Flint模组开发",
+  "mainClass": "net.Flint.example.ExampleMod",
+  "depends": [],
+  "authors": [
+    "Flint Mod Developer"
+  ],
+  "contact": {
+    "homepage": "https://github.com/flint-modding/flint",
+    "sources": "https://github.com/flint-modding/flint"
+  }
+}
