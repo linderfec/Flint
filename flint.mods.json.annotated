@@ -1,0 +1,23 @@
+{
+  // 模组的唯一标识符
+  "id": "example_mod",
+  // 模组版本号
+  "version": "1.0.0",
+  // 模组显示名称
+  "name": "Example Mod",
+  // 模组描述信息
+  "description": "这是一个示例模组，演示Flint模组开发",
+  // 模组主类的完全限定名
+  "mainClass": "net.Flint.example.ExampleMod",
+  // 模组依赖的其他模组列表
+  "depends": [],
+  // 模组作者列表
+  "authors": [
+    "Flint Mod Developer"
+  ],
+  // 联系信息，包含项目主页和源码地址
+  "contact": {
+    "homepage": "https://github.com/flint-modding/flint",
+    "sources": "https://github.com/flint-modding/flint"
+  }
+}

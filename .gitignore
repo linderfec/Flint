@@ -36,3 +36,37 @@ Thumbs.db
 # 系统文件
 System Volume Information/
 $RECYCLE.BIN/
+
+# 库文件 (不应该提交二进制JAR文件)
+libs/
+!libs/**/ # 如果需要保留libs目录结构但排除内容
+
+# Mixin JAR文件
+**/mixin-*.jar
+
+# 本地配置文件
+config/
+*.properties
+*.json
+
+# 编译后的类文件 (如果存在)
+**/*.class
+
+# 测试运行时文件
+test-output/
+test-reports/
+
+# 日志文件
+logs/
+*.log
+
+# 本地环境文件
+.env
+.local
+
+# META-INF目录（包含构建特定信息）
+META-INF/
+
+# 配置文件（如果包含本地设置）
+*.config
+*.cfg

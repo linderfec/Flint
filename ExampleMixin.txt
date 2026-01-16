@@ -1,0 +1,21 @@
+package net.Flint.mixin;
+
+import net.Flint.api.FlintAPI;
+import net.Flint.logs.logger;
+import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+
+// 这是一个示例Mixin，展示了如何使用Mixin功能
+// 用于演示如何在Minecraft客户端主类中注入代码
+// 这个示例将在Minecraft启动时输出模组信息
+//@Mixin(targets = "net.minecraft.client.main.Main") // 示例：对Minecraft主类进行mixin
+//public class ExampleMixin {
+    
+    //@Inject(method = "main", at = @At("HEAD"))
+    //private static void onMainStart(String[] args, CallbackInfo ci) {
+        //logger.info("Flint Mixin System successfully injected!");
+        //logger.info("Available mods: " + FlintAPI.getModCount());
+    //}
+//}

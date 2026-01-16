@@ -1,0 +1,13 @@
+{
+  "required": true,
+  "package": "net.Flint.mixin",
+  "refmap": "flint.refmap.json",
+  "target": "@env(DEFAULT)",
+  "minVersion": "0.8",
+  "client": [
+    "ExampleMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

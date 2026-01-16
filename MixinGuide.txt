@@ -1,0 +1,156 @@
+# Flint Mod Loader - SpongePowered Mixin 使用指南
+
+## 概述
+
+Flint Mod Loader 现在集成了SpongePowered Mixin系统，允许模组开发者在运行时修改Minecraft和其他模组的类。Mixin是一个强大的字节码操作库，允许在不直接修改原始类的情况下，向现有的类注入代码。
+
+## 配置文件
+
+### flint.mixins.json
+
+这是Mixin的配置文件，位于 `src/main/resources/flint.mixins.json`：
+
+```json
+{
+  "required": true,
+  "package": "net.Flint.mixin",
+  "refmap": "flint.refmap.json",
+  "target": "@env(DEFAULT)",
+  "minVersion": "0.8",
+  "client": [
+    "ExampleMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
+```
+
+## 创建Mixin
+
+### 1. 创建基本Mixin
+
+```java
+package net.Flint.mixin;
+
+import net.Flint.logs.logger;
+import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+
+@Mixin(targets = "net.minecraft.client.main.Main") // 替换为你要修改的实际类
+public class MyMixin {
+    
+    @Inject(method = "main", at = @At("HEAD"))
+    private static void onMainStart(String[] args, CallbackInfo ci) {
+        logger.info("MyMixin: main method is being executed!");
+    }
+}
+```
+
+### 2. 注入到方法头部
+
+```java
+@Mixin(targets = "net.minecraft.world.level.Level")
+public class LevelMixin {
+    
+    @Inject(method = "getBlockState", at = @At("HEAD"))
+    private void onGetBlockState(BlockPos pos, CallbackInfoReturnable<BlockState> cir) {
+        logger.info("Getting block state at: " + pos);
+    }
+}
+```
+
+### 3. 修改方法返回值
+
+```java
+@Mixin(targets = "net.minecraft.client.gui.screens.TitleScreen")
+public class TitleScreenMixin {
+    
+    @Inject(method = "init", at = @At("TAIL"))
+    private void onInit(CallbackInfo ci) {
+        // 在标题屏幕初始化后添加自定义按钮
+    }
+}
+```
+
+### 4. 替换整个方法
+
+```java
+@Mixin(targets = "net.minecraft.world.entity.player.Player")
+public class PlayerMixin {
+    
+    @Redirect(method = "hurt", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/damagesource/DamageSource;is(DamageType)Z"))
+    private boolean onPlayerHurt(DamageSource source, DamageType type) {
+        // 自定义伤害处理逻辑
+        return source.is(type);
+    }
+}
+```
+
+## 在模组中使用Mixin
+
+### 1. 更新模组配置
+
+在你的模组的 `flint.mods.json` 文件中添加对Mixin的依赖（如果需要）：
+
+```json
+{
+  "id": "my_mod",
+  "version": "1.0.0",
+  "name": "My Mod",
+  "description": "My awesome mod",
+  "mainClass": "com.example.mymod.MyMod",
+  "depends": [
+    "flint"
+  ]
+}
+```
+
+### 2. 注册Mixin（如果需要动态注册）
+
+在你的模组类中，你可以动态注册额外的Mixin配置：
+
+```java
+@Mod(value = "my_mod", name = "My Mod", version = "1.0.0", description = "My awesome mod")
+public class MyMod implements IFlintMod {
+    
+    @Override
+    public void onInitialize() {
+        logger.info("MyMod is initializing...");
+        
+        // 可以在这里动态添加额外的mixin配置
+        // Mixins.addConfiguration("my_mod.mixins.json");
+    }
+}
+```
+
+## 运行时参数
+
+Flint会自动在运行时添加Mixin所需的JVM参数：
+
+```
+-javaagent:libs/mixin-0.8.5.jar
+-Dmixin.config=flint.mixins.json
+-Dmixin.debug=true
+```
+
+## 注意事项
+
+1. **性能影响**：过多的Mixin可能会影响游戏启动时间和运行性能
+2. **兼容性**：确保你的Mixin与目标类的版本兼容
+3. **错误处理**：Mixin错误可能导致游戏启动失败，务必进行充分测试
+4. **命名空间**：使用唯一的包名避免与其他模组冲突
+
+## 调试Mixin
+
+可以通过添加以下JVM参数来启用Mixin调试：
+
+```
+-Dmixin.debug=true
+-Dmixin.debug.verbose=true
+-Dmixin.debug.export=true
+```
+
+这些参数会输出详细的Mixin处理信息，有助于调试问题。
