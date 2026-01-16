@@ -1,85 +1,65 @@
 package net.Flint.modloader;
 
-import java.io.File;
-import java.util.ArrayList;
-import java.util.List;
-import static net.Flint.logs.logger.logger;
+import net.Flint.lifecycle.LifecycleEvent;
+import net.Flint.lifecycle.LifecycleManager;
+import net.Flint.lifecycle.LifecyclePhase;
+import net.Flint.logs.logger;
 
-public class FlintMod {
-    //模组存放目录
-    private static final File MODS_DIR = new File("mods");
-    //系统依赖存放目录
-    private static final File SYSMODLIB_DIR = new File("mods/sysmodlib");
-
-    //加载的模组列表
-    private final List<Object> loadedMods = new ArrayList<>();
-
+/**
+ * Flint模组基础类 - 模组系统的基础实现
+ * 实现LifecycleEvent接口，提供完整的生命周期管理功能
+ */
+public class FlintMod implements LifecycleEvent {
+    
+    /**
+     * 启动Flint模组系统
+     * 初始化模组系统并触发初始化生命周期事件
+     */
     public void start() {
-        if (!MODS_DIR.exists() && !MODS_DIR.mkdir()) {
-            logger.info("Unable to create a mod catalog:" + MODS_DIR.getAbsolutePath());
-        }
-
-        File[] modJars = MODS_DIR.listFiles((dir, name) -> name.endsWith(".jar"));
-        if (modJars == null || modJars.length == 0) {
-            logger.info("No mods installed");
-            return;
-        }
-
-        for (File modJar : modJars) {
-            loadMod(modJar);
-        }
+        logger.info("Flint Mod is starting...");
         
-        initMods();
+        // 触发初始化生命周期阶段
+        LifecycleManager.triggerLifecyclePhase(LifecyclePhase.INITIALIZATION);
     }
 
-    private void loadMod(File modJar) {
-        try {
-            ModInfo modInfo = ModConfigParser.parseModInfoFromJar(modJar);
-            
-            if (modInfo.getMainClass() == null || modInfo.getMainClass().isEmpty()) {
-                logger.info("Mod " + modJar.getName() + " does not have a specified main class in its configuration!");
-                return;
-            }
-            
-            ModLoader modLoader = new ModLoader(modJar);
-            String modMainClassName = modInfo.getMainClass();
-            Class<?> modClass = modLoader.loadClass(modMainClassName);
-            
-            if (modClass.isAnnotationPresent(Mod.class) && IFlintMod.class.isAssignableFrom(modClass)) {
-                Object modInstance = modClass.getDeclaredConstructor().newInstance();
-                loadedMods.add(modInstance);
-                
-                Mod modAnnotation = modClass.getAnnotation(Mod.class);
-                String modId = modAnnotation.value();
-                
-                logger.info("Mod " + modJar.getName() + " (ID: " + modId + ") loaded successfully.");
-            } else {
-                logger.info("Mod " + modJar.getName() + " is not a valid Flint mod!");
-            }
-        } catch (Exception e) {
-            logger.info("Error loading mod " + modJar.getName() + ": ");
-            e.printStackTrace();
-        }
+    @Override
+    public void onInitialize() {
+        logger.info("FlintMod: Executing initialization phase");
+        // 执行初始化逻辑
     }
 
-    private void initMods() {
-        for (Object mod : loadedMods) {
-            if (mod instanceof IFlintMod) {
-                try {
-                    ((IFlintMod) mod).onInitialize();
-                    
-                    Class<?> modClass = mod.getClass();
-                    if (modClass.isAnnotationPresent(Mod.class)) {
-                        Mod modAnnotation = modClass.getAnnotation(Mod.class);
-                        logger.info("Mod " + modAnnotation.value() + " initialized");
-                    } else {
-                        logger.info("Mod " + modClass.getSimpleName() + " initialized");
-                    }
-                } catch (Exception e) {
-                    logger.info("Failed to initialize mod " + mod.getClass().getSimpleName());
-                    e.printStackTrace();
-                }
-            }
-        }
+    @Override
+    public void onPreStartup() {
+        logger.info("FlintMod: Executing pre-startup phase");
+        // 执行预启动逻辑
+    }
+
+    @Override
+    public void onStartup() {
+        logger.info("FlintMod: Executing startup phase");
+        // 执行启动逻辑
+    }
+
+    @Override
+    public void onPostStartup() {
+        logger.info("FlintMod: Executing post-startup phase");
+        // 执行启动后逻辑
+    }
+
+    @Override
+    public void onInGame() {
+        // 游戏中定期执行的逻辑（如果需要）
+    }
+
+    @Override
+    public void onPreShutdown() {
+        logger.info("FlintMod: Executing pre-shutdown phase");
+        // 执行预关闭逻辑
+    }
+
+    @Override
+    public void onShutdown() {
+        logger.info("FlintMod: Executing shutdown phase");
+        // 执行关闭逻辑
     }
 }

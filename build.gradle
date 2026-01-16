@@ -1,51 +1,96 @@
+// ================================================
+// Flint Mod Loader 构建脚本
+// ================================================
+// 该构建脚本定义了Flint模组加载器的构建配置
+// 包括依赖管理、Minecraft环境下载和启动配置
+
 plugins {
+    // 应用Java插件以支持Java项目构建
     id 'java'
+    // 应用下载插件以支持自动下载Minecraft相关文件
     id 'de.undercouch.download' version '5.4.0'
 }
 
+// 项目基本信息
 group = 'net.Flint'
-version = '1.0-SNAPSHOT'
+version = '1.21.10-1.0-bate'
 
+// 配置Java工具链为Java 21
 java.toolchain.languageVersion = JavaLanguageVersion.of(21)
 
+// 配置仓库，添加SpongePowered仓库以获取Mixin库
 repositories {
     mavenCentral()
+    maven {
+        name = 'SpongePowered'
+        url = 'https://repo.spongepowered.org/repository/maven-public/'
+    }
 }
 
+// 配置Java编译选项，源码和目标兼容性均为Java 21
 java {
     sourceCompatibility = JavaVersion.VERSION_21
     targetCompatibility = JavaVersion.VERSION_21
 }
 
+// 项目依赖配置
 dependencies {
+    // JUnit测试依赖
     testImplementation platform('org.junit:junit-bom:5.10.0')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    
+    // ASM字节码操作框架
     implementation 'org.ow2.asm:asm:9.6'
     implementation 'org.ow2.asm:asm-commons:9.6'
+    
+    // SLF4J日志门面
     implementation 'org.slf4j:slf4j-api:2.0.9'
+    
+    // Log4j2日志实现
     implementation 'org.apache.logging.log4j:log4j-slf4j2-impl:2.20.0'
     implementation 'org.apache.logging.log4j:log4j-core:2.20.0'
+    
+    // GSON JSON处理库
     implementation 'com.google.code.gson:gson:2.10.1'
 
+    // LaunchWrapper - required for mod loading in Minecraft
+    implementation 'net.minecraft:launchwrapper:1.12'
+    
+    // Add LaunchWrapper to the classpath so Mixin can find it
+    implementation 'org.ow2.asm:asm-debug-all:5.0.3'
+    
+    // Mixin字节码操作库
+    implementation "org.spongepowered:mixin:0.8.5"
+    annotationProcessor "org.spongepowered:mixin:0.8.5:processor"
+    
+    // Guava库，Mixin的依赖
+    implementation 'com.google.guava:guava:32.1.3-jre'
 }
 
+// 测试任务配置
 test {
+    // 使用JUnit平台执行测试
     useJUnitPlatform()
 }
 
-// 1. 改成 1.21.10
+// ================================================
+// Minecraft环境下载和配置任务
+// ================================================
+
+// 1. 指定Minecraft版本和版本清单URL
 def mcVersion = '1.21.10'
 def mcManifestUrl = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json'
 
-// 2. 工作目录
-def runDir     = layout.projectDirectory.dir('run')
-def mcDir      = runDir.dir('.minecraft')
-def versionDir = mcDir.dir("versions/$mcVersion")
-def modsDir    = mcDir.dir('mods')
-def libsDir    = mcDir.dir('libraries')
+// 2. 定义工作目录
+def runDir     = layout.projectDirectory.dir('run')        // 运行目录
+def mcDir      = runDir.dir('.minecraft')                  // Minecraft目录
+def versionDir = mcDir.dir("versions/$mcVersion")          // 版本特定目录
+def modsDir    = mcDir.dir('mods')                         // 模组目录
+def libsDir    = mcDir.dir('libraries')                    // 库文件目录
 
-// 3. 下载版本 json
+// 3. 下载版本JSON文件任务
+// 从Mojang获取指定版本的详细信息
 tasks.register('downloadVersionJson') {
     def jsonFile = versionDir.file("${mcVersion}.json").asFile
     outputs.file jsonFile
@@ -60,7 +105,8 @@ tasks.register('downloadVersionJson') {
     }
 }
 
-// 4. 下载 client.jar
+// 4. 下载Client JAR文件任务
+// 下载Minecraft客户端JAR文件，依赖于版本JSON文件
 tasks.register('downloadClientJar', de.undercouch.gradle.tasks.download.Download) {
     dependsOn downloadVersionJson
     doFirst {
@@ -73,7 +119,8 @@ tasks.register('downloadClientJar', de.undercouch.gradle.tasks.download.Download
     }
 }
 
-// 5. 下载 libraries
+// 5. 下载库文件任务
+// 下载Minecraft运行所需的所有库文件
 tasks.register('downloadLibraries') {
     dependsOn downloadVersionJson
     doLast {
@@ -81,7 +128,7 @@ tasks.register('downloadLibraries') {
         def jsonFile = downloadVersionJson.outputs.files.singleFile
         def json = slurper.parseText(jsonFile.text)
         json.libraries.each { lib ->
-            // 处理主 artifact
+            // 处理主artifact
             def artifact = lib.downloads?.artifact
             if (artifact) {
                 def path = artifact.path
@@ -96,10 +143,10 @@ tasks.register('downloadLibraries') {
                 }
             }
             
-            // 处理 natives（如果存在）
+            // 处理native库（如果存在）
             def classifiers = lib.downloads?.classifiers
             if (classifiers) {
-                // 为 Windows 选择 natives
+                // 优先选择Windows native库，其次Linux，最后macOS
                 def nativeInfo = classifiers."natives-windows" ?: classifiers."natives-linux" ?: classifiers."natives-macos"
                 if (nativeInfo) {
                     def path = nativeInfo.path
@@ -118,7 +165,8 @@ tasks.register('downloadLibraries') {
     }
 }
 
-// 6. 下载 Assets 索引
+// 6. 下载资源索引任务
+// 下载Minecraft资源索引文件
 tasks.register('downloadAssetsIndex') {
     dependsOn downloadVersionJson
     doLast {
@@ -137,7 +185,33 @@ tasks.register('downloadAssetsIndex') {
     }
 }
 
-// 7. 下载 Assets 语言文件
+// 7. Download Mixin JAR task
+// Downloads the required Mixin JAR file to the libs directory
+tasks.register('downloadMixinJar') {
+    doLast {
+        // Get the mixin jar from the runtime classpath
+        def mixinJar = configurations.runtimeClasspath.files.find { it.name.contains('mixin') && it.name.contains('0.8.5') }
+        if (mixinJar) {
+            println "Found Mixin JAR: ${mixinJar.absolutePath}"
+            def targetFile = file("libs/mixin-0.8.5.jar")
+            targetFile.parentFile.mkdirs()
+            targetFile.bytes = mixinJar.bytes
+            println "Copied Mixin JAR to ${targetFile.absolutePath}"
+            
+            // Also copy to run directory for the client
+            def runLibsDir = file("${runDir}/libs")
+            runLibsDir.mkdirs()
+            def runTargetFile = new File(runLibsDir, "mixin-0.8.5.jar")
+            runTargetFile.bytes = mixinJar.bytes
+            println "Copied Mixin JAR to run directory: ${runTargetFile.absolutePath}"
+        } else {
+            throw new GradleException("Could not find Mixin JAR in runtime classpath")
+        }
+    }
+}
+
+// 8. 下载资源文件任务
+// 下载Minecraft资源文件，特别是中文语言文件
 tasks.register('downloadAssets') {
     dependsOn downloadAssetsIndex
     doLast {
@@ -170,18 +244,20 @@ tasks.register('downloadAssets') {
     }
 }
 
-// 8. 测试 mod 拷贝
+// 9. 复制测试模组任务
+// 将构建的JAR文件复制到模组目录以供测试
 tasks.register('copyTestMod', Copy) {
     dependsOn tasks.jar
     from tasks.jar
     into modsDir
 }
 
-// 9. 启动配置
+// 10. 启动客户端任务
+// 启动Minecraft客户端，使用Flint模组加载器
 tasks.register('runClient', JavaExec) {
     group = 'minecraft'
     description = 'Launch Minecraft 1.21.10 Client with your loader'
-    dependsOn downloadClientJar, downloadLibraries, downloadAssetsIndex, downloadAssets, copyTestMod
+    dependsOn downloadClientJar, downloadLibraries, downloadAssetsIndex, downloadAssets, copyTestMod, downloadMixinJar
     workingDir = runDir.asFile
     
     // 获取所有库文件
@@ -204,9 +280,34 @@ tasks.register('runClient', JavaExec) {
     jvmArgs '-Dlog4j.configurationFile=file:src/main/resources/log4j.properties'
     // 添加库路径
     systemProperties(['java.library.path': mcDir.dir('natives').asFile.absolutePath])
+    // 添加Mixin参数
+    jvmArgs '-Dmixin.config=flint.mixins.json'
+    jvmArgs '-Dmixin.debug=true'
+    jvmArgs '-Dmixin.debug.verbose=true'
+    jvmArgs '-Dmixin.debug.export=true'
 }
 
+// JAR文件配置
+// 配置生成的JAR文件清单，指定Java Agent相关属性
 jar {
+    manifest {
+        attributes(
+            // 指定Java Agent的预加载类
+            'Premain-Class': 'net.Flint.FlintAgent',
+            // 指定Java Agent的动态加载类
+            'Agent-Class': 'net.Flint.FlintAgent',
+            // 允许重定义类
+            'Can-Redefine-Classes': 'true',
+            // 允许重新转换类
+            'Can-Retransform-Classes': 'true'
+        )
+    }
+}
+
+// 创建包含依赖的fat jar任务
+task fatJar(type: Jar) {
+    archiveBaseName.set('Flint-fat')
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     manifest {
         attributes(
             'Premain-Class': 'net.Flint.FlintAgent',
@@ -215,4 +316,24 @@ jar {
             'Can-Retransform-Classes': 'true'
         )
     }
+    
+    from {
+        configurations.runtimeClasspath.findAll { 
+            // 包含所有运行时依赖
+            true 
+        }.collect { 
+            it.isDirectory() ? it : zipTree(it).matching {
+                // 排除签名文件，避免SecurityException
+                exclude 'META-INF/*.SF'
+                exclude 'META-INF/*.DSA'
+                exclude 'META-INF/*.RSA'
+                exclude 'META-INF/MANIFEST.MF'
+                exclude 'META-INF/LICENSE*'
+                exclude 'META-INF/NOTICE*'
+                exclude 'META-INF/DEPENDENCIES*'
+            }
+        }
+    }
+    
+    with jar
 }
