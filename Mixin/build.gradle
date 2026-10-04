@@ -1,0 +1,529 @@
+// Gradle repositories and dependencies
+buildscript {
+    repositories {
+        gradlePluginPortal()
+    }
+    dependencies {
+        classpath 'gradle.plugin.com.hierynomus.gradle.plugins:license-gradle-plugin:0.16.1'
+        classpath 'com.gradleup.shadow:shadow-gradle-plugin:9.0.2'
+    }
+}
+
+import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
+
+// Apply plugin
+apply plugin: 'java'
+apply plugin: 'com.github.hierynomus.license'
+apply plugin: 'checkstyle'
+apply plugin: 'maven-publish'
+apply plugin: 'eclipse'
+apply plugin: 'idea'
+apply plugin: 'com.gradleup.shadow'
+apply plugin: 'potemkin-modules'
+
+// Default tasks
+defaultTasks 'licenseFormat', 'check', 'build'
+
+// Basic project information
+group = 'org.spongepowered'
+base {
+    archivesName = 'mixin'
+}
+version = buildVersion + (buildType == 'RELEASE' ? '' : "-$buildType")
+
+// Extended project information
+ext.projectName = 'Mixin'
+ext.inceptionYear = '2014'
+ext.packaging = 'jar'
+
+// Define variables
+ext.buildNumber = project.hasProperty("buildNumber") ? buildNumber : '0'
+ext.ciSystem = project.hasProperty("ciSystem") ? ciSystem : 'unknown'
+ext.commit = project.hasProperty("commit") ? commit : 'unknown'
+ext.asmVersion = project.hasProperty("asmVersion") ? asmVersion : '6.2'
+ext.legacyForgeAsmVersion = project.hasProperty("legacyForgeAsmVersion") ? asmVersion : '5.0.3'
+
+// True to do jar signing task
+ext.doSignJar = project.hasProperty("keyStorePath")
+
+java {
+    modularity.inferModulePath = false
+    toolchain.languageVersion = JavaLanguageVersion.of(ciSystem == 'unknown' ? 16 : 8)
+}
+
+// Project repositories
+repositories {
+    mavenCentral()
+    maven {
+        name = 'minecraft'
+        url = 'https://libraries.minecraft.net/'
+    }
+    maven {
+        // For fernflower
+        name = 'sponge'
+        url = 'https://repo.spongepowered.org/maven'
+    }
+    maven {
+        // For modlauncher
+        name = 'neoforged'
+        url = 'https://maven.neoforged.net/releases'
+    }
+}
+
+sourceSets {
+    legacy {
+        ext.languageVersion = 8
+        ext.compatibility = '1.6'
+    }
+    main {
+        compileClasspath += legacy.output
+        ext.languageVersion = 8
+        ext.compatibility = '1.6'
+    }
+    ap {
+        compileClasspath += main.output
+        ext.languageVersion = 8
+        ext.compatibility = '1.8'
+    }
+    fernflower {
+        compileClasspath += main.output
+        ext.languageVersion = 8
+        ext.compatibility = '1.6'
+        ext.modularityExcluded = true
+    }
+    agent {
+        compileClasspath += main.output
+        ext.languageVersion = 8
+        ext.compatibility = '1.6'
+    }
+    bridge {
+        compileClasspath += main.output
+        ext.languageVersion = 8
+        ext.compatibility = '1.8'
+        ext.modularityExcluded = true
+    }
+    example {
+        compileClasspath += main.output
+        compileClasspath += ap.output
+        ext.modularityExcluded = true
+    }
+    test {
+        ext.modularityExcluded = true
+    }
+    launchwrapper {
+        compileClasspath += main.output
+        ext.languageVersion = 8
+        ext.compatibility = '1.8'
+    }
+    modlauncher {
+        compileClasspath += main.output
+        ext.languageVersion = 8
+        ext.compatibility = '1.8'
+    }
+    modlauncher4 {
+        compileClasspath += main.output
+        compileClasspath += modlauncher.output
+        ext.languageVersion = 8
+        ext.compatibility = '1.8'
+    }
+    modlauncher9 {
+        ext.languageVersion = 16
+        compileClasspath += main.output
+        compileClasspath += modlauncher.output
+    }
+    modularity {
+        ext.languageVersion = 16
+        ext.modularityExcluded = true // don't add ourselves
+    }
+}
+
+// Custom configuration + extend source-set configurations (declared after
+// sourceSets, because Gradle 9 already creates <set>Implementation etc.)
+configurations {
+    stagingJar
+}
+
+configurations.named('exampleImplementation')       { it.extendsFrom(configurations.implementation) }
+configurations.named('fernflowerImplementation')    { it.extendsFrom(configurations.implementation) }
+configurations.named('launchwrapperImplementation') { it.extendsFrom(configurations.implementation) }
+configurations.named('agentImplementation')         { it.extendsFrom(configurations.implementation) }
+configurations.named('modlauncherImplementation')   { it.extendsFrom(configurations.implementation) }
+configurations.named('modlauncher9Implementation')  { it.extendsFrom(configurations.modlauncherImplementation) }
+configurations.named('modularityImplementation')    { it.extendsFrom(configurations.modlauncher9Implementation) }
+configurations.named('modularityCompileOnly')       { it.extendsFrom(configurations.compileOnly) }
+
+// Because Mixin aims to support a variety of environments, we have to be able to run with older versions of GSON and Guava that lack official module
+// names. This means the same library may appear with multiple module names. We want to be able to link our module with either of these two at
+// runtime, without having to have two versions of the library on our compile-time module path. To do this, we generate empty "potemkin" jars with
+// *only* a module descriptor for the module we want to be able to compile against.
+potemkinModules {
+    module 'com.google.gson'
+    module 'com.google.common'
+}
+
+// Project dependencies
+dependencies {
+    def guava = 'com.google.guava:guava:21.0' // from mc1.12 onwards
+
+    implementation guava
+    implementation 'com.google.code.gson:gson:2.2.4'
+    if (asmVersion.tokenize('.')[0].toInteger() < 6) {
+        implementation "org.ow2.asm:asm-debug-all:$asmVersion"
+    }
+    implementation "org.ow2.asm:asm-tree:$asmVersion"
+    implementation "org.ow2.asm:asm-commons:$asmVersion"
+    implementation "org.ow2.asm:asm-util:$asmVersion"
+
+    // Annotation Processor
+    apImplementation "org.ow2.asm:asm-tree:$asmVersion"
+    apImplementation guava
+
+    // Fernflower decompiler
+    fernflowerImplementation 'org.jetbrains.java.decompiler:fernflower:sponge-SNAPSHOT'
+
+    // LegacyLauncher service
+    launchwrapperImplementation ('net.minecraft:launchwrapper:1.11') {
+        exclude module: 'lwjgl'
+        exclude module: 'asm-debug-all'
+        exclude module: 'jopt-simple'
+    }
+
+    modlauncherImplementation 'net.sf.jopt-simple:jopt-simple:5.0.4'
+    modlauncherCompileOnly 'org.apache.logging.log4j:log4j-core:2.0-beta9'
+    modlauncherImplementation ("cpw.mods:modlauncher:$legacyModlauncherVersion") {
+        exclude module: 'asm'
+        exclude module: 'asm-analysis'
+        exclude module: 'asm-commons'
+        exclude module: 'asm-tree'
+        exclude module: 'jopt-simple'
+    }
+
+    modlauncher4Implementation ("cpw.mods:modlauncher:$legacyModlauncherVersion") {
+        exclude module: 'asm'
+        exclude module: 'asm-analysis'
+        exclude module: 'asm-commons'
+        exclude module: 'asm-tree'
+        exclude module: 'jopt-simple'
+    }
+
+    modlauncher9Implementation ("cpw.mods:modlauncher:$modlauncherVersion") {
+        exclude module: 'jopt-simple'
+    }
+    modlauncher9Implementation 'cpw.mods:securejarhandler:2.1.24'
+
+    // asm bridge
+    bridgeImplementation 'org.apache.logging.log4j:log4j-core:2.0-beta9'
+    bridgeImplementation "org.ow2.asm:asm-commons:$legacyForgeAsmVersion"
+
+    legacyImplementation "org.ow2.asm:asm-tree:$asmVersion"
+
+    modularityCompileOnly 'org.apache.logging.log4j:log4j-core:2.11.2'
+}
+
+javadoc {
+    exclude '**/throwables'
+    classpath += sourceSets.legacy.output
+    source sourceSets.ap.allJava
+    exclude {
+        it.relativePath.file && it.relativePath.pathString =~ 'tools' && !(it.name =~ /SuppressedBy|package-info/)
+    }
+    options {
+        docTitle 'Welcome to the Mixin Javadoc'
+        overview 'docs/javadoc/overview.html'
+        stylesheetFile file('docs/javadoc/mixin.css')
+        addBooleanOption '-allow-script-in-comments', true
+    }
+    doLast {
+        copy {
+            from 'docs/javadoc/resources'
+            into destinationDir
+        }
+    }
+}
+
+eclipse {
+    classpath {
+        containers 'org.eclipse.buildship.core.gradleclasspathcontainer'
+        file.whenMerged {
+            // Can't include old modlauncher because it causes issues with modules
+            entries.removeAll { it.kind == 'lib' && it.path =~ ~/modlauncher-$legacyModlauncherVersion/ }
+            entries.removeAll { it.kind == 'src' && it.path =~ ~/modlauncher4/ }
+            entries.removeAll { it.kind == 'lib' && it.path =~ ~/log4j.*beta9/ }
+
+            // Mark everything else as a module
+            entries.findAll { it.kind == "con" && it.path =~ /gradleclasspathcontainer$/ }.each {
+                it.entryAttributes['module'] = 'true'
+            }
+        }
+    }
+
+    project {
+        resourceFilter {
+            appliesTo = 'FOLDERS'
+            type = 'EXCLUDE_ALL'
+            matcher {
+                id = 'org.eclipse.ui.ide.multiFilter'
+                arguments = '1.0-name-matches-false-false-buildSrc'
+            }
+        }
+    }
+
+    // Build service task outputs for test projects
+    autoBuildTasks compileModlauncher4Java, compileModlauncher9Java, compileLaunchwrapperJava
+}
+
+// Filter, process, and include resources
+processResources {
+    // Include in final JAR
+   from 'LICENSE.txt'
+}
+
+// License header formatting
+license {
+    ext {
+        name = project.name
+        organization = project.organization
+        url = project.url
+    }
+    include '**/*.java'
+    header file("HEADER.txt")
+    sourceSets = project.sourceSets
+    ignoreFailures false
+    strictCheck true
+    mapping {
+        java = 'SLASHSTAR_STYLE'
+    }
+}
+
+checkstyle {
+    configProperties = [
+        "name"        : project.name,
+        "organization": project.organization,
+        "url"         : project.url,
+        "year"        : project.inceptionYear
+    ]
+    configFile = file("checkstyle.xml")
+    toolVersion = '8.44'
+}
+
+// Source compiler configuration
+tasks.withType(JavaCompile) {
+    options.compilerArgs += ['-Xlint:all', '-Xlint:-path', '-proc:none']
+    options.deprecation = true
+    options.encoding = 'utf8'
+}
+
+def modularityInputs = objects.fileCollection()
+
+project.sourceSets.each { set -> {
+    if (set.ext.has("languageVersion")) {
+        project.tasks[set.compileJavaTaskName].javaCompiler = javaToolchains.compilerFor {
+            languageVersion = JavaLanguageVersion.of(set.ext.languageVersion)
+        }
+    }
+    if (set.ext.has("compatibility")) {
+        project.tasks[set.compileJavaTaskName].sourceCompatibility = set.ext.compatibility
+        project.tasks[set.compileJavaTaskName].targetCompatibility = set.ext.compatibility
+    }
+    def modularityExcluded = set.ext.has("modularityExcluded") && set.ext.modularityExcluded
+    if (!modularityExcluded) {
+        project.sourceSets.modularity {
+            compileClasspath += set.output
+        }
+        modularityInputs.from set.output
+    }
+}}
+
+compileModularityJava {
+    inputs.files(modularityInputs)
+    doFirst {
+        options.compilerArgs = [
+            '--module-path', classpath.asPath,
+            '--patch-module', "org.spongepowered.mixin=${modularityInputs.collect { it.absolutePath }.join(File.pathSeparator)}"
+        ]
+    }
+}
+
+if (JavaVersion.current().isJava8Compatible()) {
+    tasks.withType(Javadoc) {
+        // disable the crazy super-strict doclint tool in Java 8
+        options.addStringOption('Xdoclint:syntax', '-quiet')
+    }
+}
+
+tasks.register('stagingJar', ShadowJar) {
+    sourceSets.findAll { !(it.name =~ /example|test/) }.each {
+        from it.output
+    }
+    configurations = [project.configurations.stagingJar]
+
+    // JAR manifest configuration
+    manifest.attributes(
+        "Built-By": System.properties['user.name'],
+        "Created-By": System.properties['java.vm.version'] + " (" + System.properties['java.vm.vendor'] + ")",
+        "Implementation-Title": name,
+        "Implementation-Version": project.version + "+" + ciSystem + "-b" + buildNumber + ".git-" + commit,
+        "Implementation-Vendor": url,
+        // for hotswap agent
+        "Premain-Class": "org.spongepowered.tools.agent.MixinAgent",
+        "Agent-Class": "org.spongepowered.tools.agent.MixinAgent",
+        "Can-Redefine-Classes": true,
+        "Can-Retransform-Classes": true
+    )
+
+    if (project.doSignJar) {
+        archiveClassifier = 'unsigned'
+    }
+
+    mergeServiceFiles()
+}
+
+// Clear artifacts because jar will be there by default and we want to use staging jar instead
+configurations.archives.artifacts.clear()
+
+// generate shadow jar so we can use the AP standalone
+shadowJar  {
+    from sourceSets.ap.output
+    archiveClassifier = 'processor'
+}
+build.dependsOn(shadowJar)
+
+if (project.doSignJar) {
+    // Define signjar task
+    tasks.register('signJar') {
+        inputs.files(stagingJar.outputs)
+        outputs.files stagingJar.outputs.files.collect {
+            new File(it.parent, it.name.replace('-unsigned', ''))
+        }
+        doLast {
+            stagingJar.outputs.files.each {
+                ant.signjar(
+                    alias: project.keyStoreCert,
+                    jar: it,
+                    signedJar: new File(it.parent, it.name.replace('-unsigned', '')),
+                    keystore: project.keyStorePath,
+                    storepass: project.keyStoreSecret,
+                    keypass: project.keyStoreSecret,
+                    tsaurl: project.timestampAuthority,
+                    preservelastmodified: 'true',
+                    verbose: true,
+                    storetype: project.keyStoreType,
+                    providerclass: project.antSignProviderClass,
+                    providerarg: project.antSignProviderArg
+                )
+            }
+        }
+    }
+    build.dependsOn(signJar)
+}
+
+// Run this task instead of build to generate a timestamped shadow jar (for dev)
+tasks.register('timestamp', Jar) {
+    dependsOn build
+    if (gradle.startParameter.taskNames.contains(name)) {
+        shadowJar.archiveClassifier = new Date().format('yyyyMMddHHmmss')
+    }
+}
+
+tasks.register('sourceJar', Jar) {
+    sourceSets.findAll { it.name != 'modularity' }.each {
+        from it.java
+        from it.resources
+    }
+    archiveClassifier = "sources"
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+tasks.register('javadocJar', Jar) {
+    dependsOn javadoc
+    from javadoc.destinationDir
+    archiveClassifier = "javadoc"
+}
+
+artifacts {
+    if (project.doSignJar) {
+        archives signJar.outputs.files[0]
+    } else {
+        archives stagingJar
+    }
+    archives sourceJar
+    archives javadocJar
+    archives shadowJar
+}
+
+ext.mavenPom = {
+    name = 'mixin'
+    packaging = project.packaging
+    description = project.projectName
+    url = 'http://www.spongepowered.org/'
+
+    scm {
+        url = 'https://github.com/SpongePowered/Mixin'
+        connection = 'scm:git:git://github.com/SpongePowered/Mixin.git'
+        developerConnection = 'scm:git:git@github.com:SpongePowered/Mixin.git'
+    }
+
+    issueManagement {
+        system = 'GitHub Issues'
+        url = 'https://github.com/SpongePowered/Mixin/issues'
+    }
+
+    licenses {
+        license {
+            name = 'MIT license'
+            url = 'http://opensource.org/licenses/MIT'
+            distribution = 'repo'
+        }
+    }
+}
+
+publishing {
+    publications {
+        maven(MavenPublication) {
+            pom mavenPom
+            groupId = project.group
+            version = project.version
+            artifactId = 'mixin'
+
+            if (project.doSignJar) {
+                artifact signJar.outputs.files[0]
+            } else {
+                artifact stagingJar
+            }
+            artifact sourceJar
+            artifact javadocJar
+            artifact shadowJar
+        }
+    }
+
+    repositories {
+        if (buildType == 'RELEASE') {
+            if (project.hasProperty("releaseRepo")) {
+                maven {
+                    credentials {
+                        username = project.releaseRepoUsername
+                        password = project.releaseRepoPassword
+                    }
+                    url project.releaseRepo
+                }
+            }
+            if (project.hasProperty("spongeReleaseRepo")) {
+                maven {
+                    credentials {
+                        username = project.spongeUsername
+                        password = project.spongePassword
+                    }
+                    url project.spongeReleaseRepo
+                }
+            }
+        } else if (project.hasProperty("spongeSnapshotRepo")) {
+            maven {
+                credentials {
+                    username = project.spongeUsername
+                    password = project.spongePassword
+                }
+                url project.spongeSnapshotRepo
+            }
+        }
+    }
+}
