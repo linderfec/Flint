@@ -1,0 +1,47 @@
+plugins {
+    id 'java'
+}
+
+group = 'org.linderfec'
+version = '26.2:1.22.2-0.1.0'
+
+repositories {
+    maven { url 'https://maven.aliyun.com/repository/public/' }
+    mavenCentral()
+}
+
+dependencies {
+    compileOnly fileTree("libs/minecraft/26.3.jar")
+    implementation project(':Mixin')
+    annotationProcessor project(path: ':Mixin', configuration: 'shadowRuntimeElements')
+    testImplementation platform('org.junit:junit-bom:6.0.0')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    implementation 'org.ow2.asm:asm:9.10.1'
+    implementation 'org.ow2.asm:asm-commons:9.10.1'
+    implementation 'org.ow2.asm:asm-util:9.10.1'
+}
+
+jar {
+    archiveFileName = 'Flint-26.2-1.22.2-0.1.0.jar'
+    manifest {
+        attributes(
+                'Premain-Class': 'org.linderfec.AgentMain',      // Agent 入口
+                'Can-Redefine-Classes': 'true',                   // 允许重新定义类
+                'Can-Retransform-Classes': 'true'                  // 允许重新转换类
+        )
+    }
+    // 将 ASM 依赖一起打入 Jar（fat jar），确保 Agent 运行时能找到
+    from {
+        configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE   // 同名文件保留第一个
+}
+
+test {
+    useJUnitPlatform()
+}
+
+tasks.withType(JavaCompile) {
+    options.compilerArgs << '-proc:none'   // 禁用注解处理，见上方 annotationProcessor 注释
+}

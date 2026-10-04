@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="JsonSchemaMappingsProjectConfiguration">
+    <state>
+      <map>
+        <entry key="Travis CI (.travis.yml)">
+          <value>
+            <SchemaInfo>
+              <option name="name" value="Travis CI (.travis.yml)" />
+              <option name="relativePathToSchema" value="https://www.schemastore.org/travis.json" />
+              <option name="applicationDefined" value="true" />
+              <option name="patterns">
+                <list>
+                  <Item>
+                    <option name="path" value="Mixin/.travis.yml" />
+                  </Item>
+                </list>
+              </option>
+            </SchemaInfo>
+          </value>
+        </entry>
+        <entry key="无 JSON 架构">
+          <value>
+            <SchemaInfo>
+              <option name="ignoredFile" value="true" />
+              <option name="name" value="无 JSON 架构" />
+              <option name="relativePathToSchema" value="" />
+              <option name="applicationDefined" value="true" />
+              <option name="patterns">
+                <list>
+                  <Item>
+                    <option name="path" value="file://$PROJECT_DIR$/flint.mixins.json" />
+                  </Item>
+                </list>
+              </option>
+              <option name="isIgnoredFile" value="true" />
+            </SchemaInfo>
+          </value>
+        </entry>
+      </map>
+    </state>
+  </component>
+</project>

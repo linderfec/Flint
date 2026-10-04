@@ -1,0 +1,12 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "org.linderfec.mixin",
+  "compatibilityLevel": "JAVA_25",
+  "client": [
+    "TitleScreenTransformer"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
