@@ -41,3 +41,5 @@ bin/
 
 ### Mac OS ###
 .DS_Store
+### Flint self-contained runtime (when minecraftDir points here) ###
+.flint/

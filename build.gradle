@@ -1,47 +1,507 @@
+import groovy.json.JsonSlurper
+
+import java.security.MessageDigest
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
+
 plugins {
     id 'java'
 }
 
-group = 'org.linderfec'
-version = '26.2:1.22.2-0.1.0'
+group = 'org.flint'
+// version comes from gradle.properties
 
 repositories {
     maven { url 'https://maven.aliyun.com/repository/public/' }
     mavenCentral()
+
+    maven {
+        name = 'Mojang'
+        url = 'https://libraries.minecraft.net/'
+        content {
+            includeGroup "met.mineraft"
+        }
+    }
 }
 
 dependencies {
-    compileOnly fileTree("libs/minecraft/26.3.jar")
+    compileOnly fileTree(".flint/minecraft/client.jar")
     implementation project(':Mixin')
     annotationProcessor project(path: ':Mixin', configuration: 'shadowRuntimeElements')
     testImplementation platform('org.junit:junit-bom:6.0.0')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
-    implementation 'org.ow2.asm:asm:9.10.1'
-    implementation 'org.ow2.asm:asm-commons:9.10.1'
-    implementation 'org.ow2.asm:asm-util:9.10.1'
+    implementation "org.ow2.asm:asm:${project.asm_version}"
+    implementation "org.ow2.asm:asm-util:${project.asm_version}"
+    implementation "org.ow2.asm:asm-commons:${project.asm_version}"
+    implementation "org.ow2.asm:asm-analysis:${project.asm_version}"
+    implementation "org.ow2.asm:asm-tree:${project.asm_version}"
 }
 
 jar {
-    archiveFileName = 'Flint-26.2-1.22.2-0.1.0.jar'
+    archiveFileName = "Flint-${version}.jar"
     manifest {
         attributes(
-                'Premain-Class': 'org.linderfec.AgentMain',      // Agent 入口
-                'Can-Redefine-Classes': 'true',                   // 允许重新定义类
-                'Can-Retransform-Classes': 'true'                  // 允许重新转换类
+                'Premain-Class': 'org.flint.AgentMain',            // agent entry point
+                'Can-Redefine-Classes': 'true',                    // allow redefinition
+                'Can-Retransform-Classes': 'true'                  // allow retransformation
         )
     }
-    // 将 ASM 依赖一起打入 Jar（fat jar），确保 Agent 运行时能找到
+
     from {
         configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
     }
-    duplicatesStrategy = DuplicatesStrategy.EXCLUDE   // 同名文件保留第一个
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE   // keep the first entry when merging jars
 }
 
 test {
     useJUnitPlatform()
 }
 
+// keep IDEA from indexing the downloaded runtime (~550MB of assets)
+apply plugin: 'idea'
+idea {
+    module {
+        excludeDirs += file('.flint')
+    }
+}
+
 tasks.withType(JavaCompile) {
-    options.compilerArgs << '-proc:none'   // 禁用注解处理，见上方 annotationProcessor 注释
+    options.compilerArgs << '-proc:none'   // annotation processing is disabled (see annotationProcessor above)
+}
+
+// =============================================================
+//  Self-contained Minecraft runtime: Gradle prepares everything, HMCL is not involved.
+//  All artifacts live under build/minecraft:
+//    version.json   official version manifest
+//    client.jar     game client
+//    libraries/     runtime libraries, filtered by the OS rules of the version json
+//    natives/       native libraries (java / jna / lwjgl / netty), created on demand
+//    assets/        game resources (~484MB, downloaded once)
+//    log_configs/   log4j2 configuration
+//    run/           game directory (saves, logs, mods)
+//
+//  Tasks:
+//    downloadMinecraft   version manifest + client.jar
+//    downloadLibraries   runtime libraries
+//    downloadAssets      game resources (first run ~484MB)
+//    printRunArgs        print the launch command without starting the game
+//    runClient           build the agent and launch the client
+//
+//  Optional overrides: -PassetsDir=/path/assets  -PrunDir=/path/gamedir
+// =============================================================
+
+ext.mcVersion     = minecraft_version
+// runtime root defaults to build/minecraft; -PminecraftDir moves it elsewhere so `gradle clean` keeps the downloads
+ext.mcRoot        = project.hasProperty('minecraftDir') ? file(project.minecraftDir)
+                        : layout.buildDirectory.dir('minecraft').get().asFile
+ext.mcVersionJson = new File(mcRoot, 'version.json')
+ext.mcClientJar   = new File(mcRoot, 'client.jar')
+ext.mcLibraries   = new File(mcRoot, 'libraries')
+ext.mcNatives     = new File(mcRoot, 'natives')
+ext.mcLogConfigs  = new File(mcRoot, 'log_configs')
+ext.mcAssetsDir   = project.hasProperty('assetsDir') ? file(project.assetsDir) : new File(mcRoot, 'assets')
+ext.mcRunDir      = project.hasProperty('runDir') ? file(project.runDir) : new File(mcRoot, 'run')
+
+// ---------- helpers (script-level methods, callable from any task closure) ----------
+
+/** Read a project property (gradle.properties or -P) with a fallback default. */
+String prop(String name, String dflt) {
+    def v = project.findProperty(name)
+    return v == null ? dflt : v.toString()
+}
+
+/** Same as prop(), but typed as int (non-numeric values fall back to the default). */
+int intProp(String name, int dflt) {
+    def v = project.findProperty(name)?.toString()
+    return (v != null && v.isInteger()) ? v.toInteger() : dflt
+}
+
+/** Map java's os.name onto the os names used by Mojang (linux / osx / windows). */
+String currentOsName() {
+    def n = System.getProperty('os.name').toLowerCase()
+    if (n.contains('linux')) return 'linux'
+    if (n.contains('mac') || n.contains('darwin')) return 'osx'
+    if (n.contains('windows')) return 'windows'
+    return n
+}
+
+/**
+ * Evaluate the "rules" array of the official version json.
+ * Later rules win, matching the behaviour of the official launcher.
+ */
+boolean rulesAllow(rules) {
+    if (rules == null) return true
+    boolean allowed = false
+    for (def r : rules) {
+        boolean match = true
+        def os = r['os']
+        if (os != null && os['name'] != null) {
+            // "universal" means "any OS" (only the arch matters), never compare it with os.name
+            def wantOs = os['name'].toString()
+            if (wantOs != 'universal' && wantOs != currentOsName()) match = false
+        }
+        if (os != null && os['arch'] != null) {
+            // arch rules only appear as {"arch":"x86"} -> compare 32/64 bit
+            def want = os['arch'].toString().toLowerCase()
+            def have = System.getProperty('os.arch').toLowerCase()
+            if (want.contains('64') != have.contains('64')) match = false
+        }
+        if (r['features'] != null) {
+            // a feature rule matches only when every feature has exactly the requested state
+            def feats = currentFeatures()
+            for (e : r['features']) {
+                if (feats[e.key] != e.value) { match = false; break }
+            }
+        }
+        if (!match) continue
+        allowed = r['action'] == 'allow'
+    }
+    return allowed
+}
+
+/**
+ * Launcher features this Gradle setup claims to support.
+ * Only a fixed window size is opt-in: passing --width/--height on every launch would
+ * overwrite the size the game remembered in options.txt.
+ */
+Map currentFeatures() {
+    [
+            'is_demo_user'               : false,
+            'has_custom_resolution'      : project.hasProperty('windowWidth') || project.hasProperty('windowHeight'),
+            'has_quick_plays_support'    : false,
+            'is_quick_play_singleplayer' : false,
+            'is_quick_play_multiplayer'  : false,
+            'is_quick_play_realms'       : false
+    ]
+}
+
+/** SHA-1 of a file as lowercase hex. */
+String fileSha1(File f) {
+    def md = MessageDigest.getInstance('SHA-1')
+    f.withInputStream { i ->
+        byte[] buf = new byte[65536]
+        int n
+        while ((n = i.read(buf)) > 0) md.update(buf, 0, n)
+    }
+    md.digest().encodeHex().toString()
+}
+
+/**
+ * Download a single file to a UUID-suffixed temp file and rename it only after the size/sha1
+ * checks pass, so concurrent builds never corrupt each other.
+ */
+void fetchOnce(String url, File dest, def size, def sha1hex) {
+    // Disable keep-alive: the CDN silently drops idle connections and the JVM keeps reading from the dead socket
+    if (System.getProperty('http.keepAlive') == null) System.setProperty('http.keepAlive', 'false')
+
+    dest.parentFile?.mkdirs()
+    def tmp = new File(dest.parentFile, "${dest.name}.${java.util.UUID.randomUUID()}.part")
+    def conn = null
+    try {
+        conn = new URI(url).toURL().openConnection()
+        conn.connectTimeout = intProp('connectTimeoutMs', 10000)
+        conn.readTimeout = intProp('readTimeoutMs', 20000)
+        if (conn instanceof HttpURLConnection) {
+            int code = conn.responseCode
+            if (code < 200 || code >= 300) throw new GradleException("HTTP ${code}")
+        }
+        def input = conn.inputStream          // HttpURLConnection has no withInputStream() helper, manage the stream manually
+        try {
+            tmp.withOutputStream { o -> o << input }
+        } finally {
+            input.close()
+        }
+
+        if (size != null && tmp.length() != ((Number) size).longValue()) {
+            throw new GradleException("size mismatch (${tmp.length()} != ${size})")
+        }
+        if (sha1hex != null && fileSha1(tmp) != sha1hex.toString()) {
+            throw new GradleException("sha1 mismatch")
+        }
+        dest.delete()
+        if (!tmp.renameTo(dest)) {
+            dest.bytes = tmp.bytes
+        }
+    } finally {
+        try { if (conn instanceof java.net.HttpURLConnection) conn.disconnect() } catch (ignored) { }
+        tmp.delete()      // on success renameTo() already moved tmp away, this only cleans up failures
+    }
+}
+
+/** Download one file; skip it when an existing copy already passes the size/sha1 checks. */
+void fetch(String url, File dest, def size = null, def sha1hex = null, int retries = -1) {
+    if (retries < 0) retries = intProp('downloadRetries', 4)
+    if (dest.exists()) {
+        boolean sizeOk = (size == null || dest.length() == ((Number) size).longValue())
+        boolean shaOk = (sha1hex == null || fileSha1(dest) == sha1hex.toString())
+        if (sizeOk && shaOk) return
+    }
+    Exception last = null
+    for (int attempt = 1; attempt <= retries; attempt++) {
+        try {
+            fetchOnce(url, dest, size, sha1hex)
+            return
+        } catch (Exception e) {
+            last = e
+            if (attempt < retries) Thread.sleep(400L * attempt)
+        }
+    }
+    throw new GradleException("download failed after ${retries} attempts: ${url}\n  ${last?.message}")
+}
+
+/** Download and parse the version json; re-fetch it when missing or when it belongs to another version. */
+Map ensureVersionJson(File dest, String id) {
+    if (dest.exists()) {
+        def j = new JsonSlurper().parse(dest)
+        if (j['id'] == id) return j
+    }
+    dest.parentFile?.mkdirs()
+    def manifest = new File(dest.parentFile, 'version_manifest.json')
+    manifest.delete()
+    fetch('https://piston-meta.mojang.com/mc/game/version_manifest_v2.json', manifest)
+    def m = new JsonSlurper().parse(manifest)
+    def v = m['versions'].find { it['id'] == id }
+    if (v == null) throw new GradleException("version manifest has no entry for ${id}")
+    fetch(v['url'].toString(), dest)
+    return new JsonSlurper().parse(dest)
+}
+
+/** Replace ${name} placeholders (literal replacement, no regex). */
+String expand(String s, Map vars) {
+    def out = s
+    vars.each { k, v -> out = out.replace('${' + k + '}', v == null ? '' : v.toString()) }
+    return out
+}
+
+/** Expand one "arguments" list from the version json, dropping entries whose rules reject this system. */
+List<String> resolveArgs(def list, Map vars) {
+    def out = []
+    if (list == null) return out
+    for (def a : list) {
+        if (a instanceof String) {
+            out << expand(a, vars)
+            continue
+        }
+        if (!rulesAllow(a['rules'])) continue
+        def v = a['value']
+        if (v instanceof Collection) {
+            for (def x : v) out << expand(x.toString(), vars)
+        } else {
+            out << expand(v.toString(), vars)
+        }
+    }
+    return out
+}
+
+/** Library jars required on this OS (rules-filtered). */
+List<File> clientLibraries(Map json) {
+    json['libraries']
+            .findAll { rulesAllow(it['rules']) }
+            .collect { new File(mcLibraries, it['downloads']['artifact']['path']) }
+}
+
+/**
+ * Validate the environment and build the full launch command (nothing is started here).
+ * Prerequisites: downloadMinecraft / downloadLibraries / downloadAssets.
+ */
+List<String> buildLaunchCommand() {
+    def json = ensureVersionJson(mcVersionJson, mcVersion)
+
+    // 1. Java version (26.3 requires Java 25)
+    def needJava = ((json['javaVersion'] ?: [:])['majorVersion'] ?: 0) as int
+    def curJava = System.getProperty('java.version').tokenize('.')[0] as int
+    if (curJava < needJava) {
+        throw new GradleException("Minecraft ${mcVersion} requires Java ${needJava}, but Gradle is running on Java ${curJava}. " +
+                "Set the Gradle JVM to Java ${needJava}.")
+    }
+
+    // 2. required files
+    if (!mcClientJar.exists()) {
+        throw new GradleException('client.jar is missing, run downloadMinecraft first')
+    }
+    def libFiles = clientLibraries(json)
+    def missing = libFiles.findAll { !it.exists() }
+    if (missing) {
+        throw new GradleException("missing ${missing.size()} libraries, run downloadLibraries first:\n  " +
+                missing.take(3).join('\n  '))
+    }
+    def cp = ([mcClientJar] + libFiles).collect { it.absolutePath }.join(File.pathSeparator)
+
+    // 3. ${placeholder} variables
+    def player = prop('offlinePlayerName', 'Dev')
+    def devUuid = UUID.nameUUIDFromBytes("OfflinePlayer:${player}".getBytes('UTF-8')).toString()
+    def vars = [
+            natives_directory     : mcNatives.absolutePath,
+            classpath             : cp,
+            launcher_name         : 'gradle',
+            launcher_version      : project.version.toString(),
+            auth_player_name      : player,
+            version_name          : mcVersion,
+            game_directory        : mcRunDir.absolutePath,
+            assets_root           : mcAssetsDir.absolutePath,
+            assets_index_name     : json['assetIndex']['id'].toString(),
+            auth_uuid             : devUuid,
+            auth_access_token     : '0',
+            clientid              : '',
+            auth_xuid             : '',
+            version_type          : 'release',
+            resolution_width      : prop('windowWidth', '854'),
+            resolution_height     : prop('windowHeight', '480'),
+            quickPlayPath         : new File(mcRunDir, 'quickPlay.json').absolutePath,
+            quickPlaySingleplayer : '',
+            quickPlayMultiplayer  : '',
+            quickPlayRealms       : ''
+    ]
+
+    // 4. JVM arguments taken verbatim from the official json (filtered by os/arch/feature rules)
+    def jvmArgs = resolveArgs(json['arguments']?['jvm'], vars)
+
+    // 5. log4j2 configuration
+    def logging = json['logging']?['client']
+    if (logging != null) {
+        def logFile = new File(mcLogConfigs, logging['file']['id'].toString())
+        fetch(logging['file']['url'].toString(), logFile,
+              logging['file']['size'], logging['file']['sha1'])
+        jvmArgs += resolveArgs([logging['argument']], vars + [path: logFile.absolutePath])
+    }
+
+    // 6. game directory and the natives sub-directories referenced by -D options
+    mcRunDir.mkdirs()
+    jvmArgs.each { a ->
+        if (a.startsWith('-D')) {
+            def eq = a.indexOf('=')
+            if (eq > 0) {
+                def v = a.substring(eq + 1)
+                if (v.startsWith(mcNatives.absolutePath)) new File(v).mkdirs()
+            }
+        }
+    }
+
+    // 7. assemble the command
+    def agentJar = project.jar.archiveFile.get().asFile
+    def agentArgs = "--gamedir=${mcRunDir.absolutePath},--pubsystem=${new File(mcRunDir, 'pubSystem').absolutePath}"
+
+    // Windows launches java.exe, every other platform java
+    def javaExe = new File(new File(System.getProperty('java.home'), 'bin'),
+                           currentOsName() == 'windows' ? 'java.exe' : 'java')
+    def cmd = [javaExe.absolutePath]
+    cmd += jvmArgs                                                // -cp ${classpath} is the last JVM argument
+    cmd += ["-javaagent:${agentJar.absolutePath}=${agentArgs}".toString()]
+    cmd += [json['mainClass'].toString()]
+    cmd += resolveArgs(json['arguments']?['game'], vars)
+    return cmd
+}
+
+// ---------- tasks ----------
+
+tasks.register('downloadMinecraft') {
+    group = 'flint'
+    description = "download the version manifest and client.jar for Minecraft ${mcVersion}"
+    doLast {
+        def json = ensureVersionJson(mcVersionJson, mcVersion)
+        def dl = json['downloads']['client']
+        fetch(dl['url'].toString(), mcClientJar, dl['size'], dl['sha1'])
+        logger.lifecycle("client.jar ready (${mcClientJar.length()} bytes)")
+    }
+}
+
+tasks.register('downloadLibraries') {
+    group = 'flint'
+    description = 'download the runtime libraries required by the current OS (including natives)'
+    dependsOn 'downloadMinecraft'
+    doLast {
+        def json = new JsonSlurper().parse(mcVersionJson)
+        def wanted = json['libraries'].findAll { rulesAllow(it['rules']) }
+        wanted.each { lib ->
+            def art = lib['downloads']['artifact']
+            fetch(art['url'].toString(), new File(mcLibraries, art['path']), art['size'], art['sha1'])
+        }
+        logger.lifecycle("libraries ready: ${wanted.size()} -> ${mcLibraries}")
+    }
+}
+
+/** Download one asset object (hash prefix forms the sub-directory). */
+void downloadAsset(Map w) {
+    def sub = w['hash'].substring(0, 2)
+    fetch("https://resources.download.minecraft.net/${sub}/${w['hash']}",
+          new File(mcAssetsDir, "objects/${sub}/${w['hash']}"), w['size'])
+}
+
+tasks.register('downloadAssets') {
+    group = 'flint'
+    description = 'download the asset index and game resources (first run ~484MB)'
+    dependsOn 'downloadMinecraft'
+    doLast {
+        def json = new JsonSlurper().parse(mcVersionJson)
+        def ai = json['assetIndex']
+        def indexFile = new File(mcAssetsDir, "indexes/${ai['id']}.json")
+        fetch(ai['url'].toString(), indexFile, ai['size'], ai['sha1'])
+        def idx = new JsonSlurper().parse(indexFile)
+
+        def work = idx['objects'].values().collect {
+            [hash: it['hash'].toString(), size: it['size']]
+        }
+        def failed = Collections.synchronizedList([])
+        def done = new AtomicInteger(0)
+        def pool = Executors.newFixedThreadPool(intProp('assetDownloadThreads', 8))
+        try {
+            def futures = work.collect { w ->
+                pool.submit({
+                    try {
+                        downloadAsset(w)
+                        int n = done.incrementAndGet()
+                        if (n % 500 == 0) logger.lifecycle("assets progress ${n}/${work.size()}")
+                    } catch (Exception e) {
+                        failed << w
+                        logger.warn("retry queue: ${w['hash']} -> ${e.message}")
+                    }
+                } as Runnable)
+            }
+            futures.each { it.get() }
+        } finally {
+            pool.shutdown()
+        }
+
+        // second pass: retry the failures serially, the CDN throttles parallel bursts
+        if (!failed.isEmpty()) {
+            logger.warn("first pass left ${failed.size()} files behind, retrying serially...")
+            def still = []
+            failed.each { w ->
+                try { downloadAsset(w) } catch (Exception e) { still << "${w['hash']} (${w['size']}): ${e.message}" }
+            }
+            if (!still.isEmpty()) {
+                throw new GradleException("${still.size()} assets failed to download, re-run downloadAssets to resume:\n  " +
+                        still.take(5).join('\n  '))
+            }
+        }
+        logger.lifecycle("assets ready: ${work.size()} objects -> ${mcAssetsDir}")
+    }
+}
+
+tasks.register('printRunArgs') {
+    group = 'flint'
+    description = 'print the full runClient launch command without starting the game'
+    dependsOn 'downloadLibraries'
+    doLast {
+        logger.lifecycle("working directory: ${mcRunDir}")
+        logger.lifecycle(buildLaunchCommand().join(' '))
+    }
+}
+
+tasks.register('runClient') {
+    group = 'flint'
+    description = "build the Flint agent and launch the ${mcVersion} client (offline 'Dev' account, no HMCL)"
+    dependsOn 'jar', 'downloadLibraries', 'downloadAssets'
+
+    doLast {
+        def cmd = buildLaunchCommand()
+        logger.lifecycle("working directory: ${mcRunDir}")
+        logger.lifecycle(cmd.join(' '))
+
+        def proc = new ProcessBuilder(cmd).directory(mcRunDir).inheritIO().start()
+        def code = proc.waitFor()
+        if (code != 0) throw new GradleException("client exited abnormally with code ${code}")
+        logger.lifecycle('client exited normally')
+    }
 }

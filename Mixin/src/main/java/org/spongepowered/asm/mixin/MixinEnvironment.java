@@ -788,7 +788,7 @@ public final class MixinEnvironment implements ITokenProvider {
             
             @Override
             boolean isSupported() {
-                return JavaVersion.current() >= JavaVersion.JAVA_17 && ASM.isAtLeastVersion(9, 1);
+                return JavaVersion.current() >= JavaVersion.JAVA_17 && supportsClassVersion(Opcodes.V17);
             }
             
         },
@@ -802,7 +802,7 @@ public final class MixinEnvironment implements ITokenProvider {
             
             @Override
             boolean isSupported() {
-                return JavaVersion.current() >= JavaVersion.JAVA_18 && ASM.isAtLeastVersion(9, 2);
+                return JavaVersion.current() >= JavaVersion.JAVA_18 && supportsClassVersion(Opcodes.V18);
             }
             
         },
@@ -816,7 +816,7 @@ public final class MixinEnvironment implements ITokenProvider {
             
             @Override
             boolean isSupported() {
-                return JavaVersion.current() >= JavaVersion.JAVA_19 && ASM.isAtLeastVersion(9, 3);
+                return JavaVersion.current() >= JavaVersion.JAVA_19 && supportsClassVersion(Opcodes.V19);
             }
             
         },
@@ -830,7 +830,7 @@ public final class MixinEnvironment implements ITokenProvider {
             
             @Override
             boolean isSupported() {
-                return JavaVersion.current() >= JavaVersion.JAVA_20 && ASM.isAtLeastVersion(9, 4);
+                return JavaVersion.current() >= JavaVersion.JAVA_20 && supportsClassVersion(Opcodes.V20);
             }
             
         },
@@ -844,10 +844,67 @@ public final class MixinEnvironment implements ITokenProvider {
             
             @Override
             boolean isSupported() {
-                return JavaVersion.current() >= JavaVersion.JAVA_21 && ASM.isAtLeastVersion(9, 5);
+                return JavaVersion.current() >= JavaVersion.JAVA_21 && supportsClassVersion(Opcodes.V21);
             }
             
+        },
+
+        /**
+         * Java 22 or above is required
+         */
+        JAVA_22(22, Opcodes.V22, LanguageFeatures.METHODS_IN_INTERFACES | LanguageFeatures.PRIVATE_SYNTHETIC_METHODS_IN_INTERFACES
+                | LanguageFeatures.PRIVATE_METHODS_IN_INTERFACES | LanguageFeatures.NESTING | LanguageFeatures.DYNAMIC_CONSTANTS
+                | LanguageFeatures.RECORDS | LanguageFeatures.SEALED_CLASSES) {
+
+            @Override
+            boolean isSupported() {
+                return JavaVersion.current() >= JavaVersion.JAVA_22 && supportsClassVersion(Opcodes.V22);
+            }
+
+        },
+
+        /**
+         * Java 23 or above is required
+         */
+        JAVA_23(23, Opcodes.V23, LanguageFeatures.METHODS_IN_INTERFACES | LanguageFeatures.PRIVATE_SYNTHETIC_METHODS_IN_INTERFACES
+                | LanguageFeatures.PRIVATE_METHODS_IN_INTERFACES | LanguageFeatures.NESTING | LanguageFeatures.DYNAMIC_CONSTANTS
+                | LanguageFeatures.RECORDS | LanguageFeatures.SEALED_CLASSES) {
+
+            @Override
+            boolean isSupported() {
+                return JavaVersion.current() >= JavaVersion.JAVA_23 && supportsClassVersion(Opcodes.V23);
+            }
+
+        },
+
+        /**
+         * Java 24 or above is required
+         */
+        JAVA_24(24, Opcodes.V24, LanguageFeatures.METHODS_IN_INTERFACES | LanguageFeatures.PRIVATE_SYNTHETIC_METHODS_IN_INTERFACES
+                | LanguageFeatures.PRIVATE_METHODS_IN_INTERFACES | LanguageFeatures.NESTING | LanguageFeatures.DYNAMIC_CONSTANTS
+                | LanguageFeatures.RECORDS | LanguageFeatures.SEALED_CLASSES) {
+
+            @Override
+            boolean isSupported() {
+                return JavaVersion.current() >= JavaVersion.JAVA_24 && supportsClassVersion(Opcodes.V24);
+            }
+
+        },
+
+        /**
+         * Java 25 or above is required
+         */
+        JAVA_25(25, Opcodes.V25, LanguageFeatures.METHODS_IN_INTERFACES | LanguageFeatures.PRIVATE_SYNTHETIC_METHODS_IN_INTERFACES
+                | LanguageFeatures.PRIVATE_METHODS_IN_INTERFACES | LanguageFeatures.NESTING | LanguageFeatures.DYNAMIC_CONSTANTS
+                | LanguageFeatures.RECORDS | LanguageFeatures.SEALED_CLASSES) {
+
+            @Override
+            boolean isSupported() {
+                return JavaVersion.current() >= JavaVersion.JAVA_25 && supportsClassVersion(Opcodes.V25);
+            }
+
         };
+
         
         /**
          * Default compatibility level to use if not specified by the service 
@@ -888,6 +945,24 @@ public final class MixinEnvironment implements ITokenProvider {
             this.ver = ver;
             this.classVersion = classVersion;
             this.languageFeatures = languageFeatures;
+        }
+        
+        /**
+         * Check whether the active ASM can read and write class files at the
+         * supplied class file version (an <tt>Opcodes.Vxx</tt> constant).
+         * 
+         * <p>This is used instead of <tt>ASM.isAtLeastVersion(9, minor)</tt>
+         * for Java 17 and above because a shaded/relocated ASM library loses
+         * its <tt>Implementation-Version</tt> manifest attribute, so the ASM
+         * minor version detected at runtime is always 0 and the minor-version
+         * API checks can never be satisfied regardless of the actual ASM
+         * version bundled.</p>
+         * 
+         * @param opcodesVersion an <tt>Opcodes.Vxx</tt> class version constant
+         * @return true if the active ASM supports that class file version
+         */
+        private static boolean supportsClassVersion(int opcodesVersion) {
+            return ASM.getMaxSupportedClassVersionMajor() >= (opcodesVersion & 0xFFFF);
         }
         
         /**

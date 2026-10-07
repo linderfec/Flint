@@ -351,6 +351,16 @@ if (JavaVersion.current().isJava8Compatible()) {
     }
 }
 
+// The main source set compiles against the legacy source set (PluginHandle
+// throws CompanionPluginError and calls into the relocated org.spongepowered.asm.lib
+// classes) but the default jar only packages main output, so consumers which
+// depend on this project (e.g. Flint's fat jar) would be missing those classes
+// at runtime. Package them here as well.
+jar {
+    from sourceSets.legacy.output
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
 tasks.register('stagingJar', ShadowJar) {
     sourceSets.findAll { !(it.name =~ /example|test/) }.each {
         from it.output

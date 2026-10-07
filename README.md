@@ -1,4 +1,4 @@
-<img src="Flint.png">
+<img src="src/main/resources/Flint.png">
 
 # Flint
 ___
@@ -12,18 +12,4 @@ Flint 是一款面向 Minecraft 的免费、开源、插件式模组加载器。
 | 支持 | 版本 |
 |-----|:----:|
 | yes | 26.3 |
-| yes | 26.2 | 
-
-
-
-````
-{
-  "id": "26.3-Flint",
-  "inheritsFrom": "26.3",
-  "arguments": {
-    "jvm": [
-      "-javaagent:/home/linderfec/cod/Flint/.minecraft/versions/26.3-Flint/Flint-26.2-1.22.2-0.1.0.jar=--gamedir=/home/linderfec/cod/Flint/.minecraft/versions/26.3-Flint"
-    ]
-  }
-}
-````
+| yes | 26.2 |
